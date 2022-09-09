@@ -1,4 +1,4 @@
-from mtmlf_dict import MtmlfDict
+from fork_aware_dict import MtmlfDict
 
 
 def test_with_simple_dict():

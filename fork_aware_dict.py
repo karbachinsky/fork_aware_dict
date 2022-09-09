@@ -5,7 +5,7 @@ import zlib
 from typing import Any, Callable, Generator, Hashable, Iterable, Optional, Union, List
 
 
-class MtmlfDict:
+class ForkAwareDict:
     """
     Consider you have a huge dictionary.
     Keys are strings and values are some complex structures.
@@ -16,7 +16,7 @@ class MtmlfDict:
     Here is ant article explaining the problem:
 
     Usage example:
-    filename: str = MtmlfDict.create(
+    filename: str = ForkAwareDict.create(
         {
             "foo": "aaa",
             "bar": "bbbb",
@@ -24,7 +24,7 @@ class MtmlfDict:
         }.items()
     )
 
-    index = MtmlfDict(filename=filename)
+    index = ForkAwareDict(filename=filename)
 
     assert index.get("bar") == "bbbb"
 
