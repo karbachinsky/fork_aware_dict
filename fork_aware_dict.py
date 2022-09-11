@@ -2,7 +2,18 @@ import mmap
 import struct
 import tempfile
 import zlib
-from typing import Any, Callable, Generator, Hashable, Iterable, Optional, Union, List, Dict, Tuple
+from typing import (
+    Any,
+    Callable,
+    Generator,
+    Hashable,
+    Iterable,
+    Optional,
+    Union,
+    List,
+    Dict,
+    Tuple,
+)
 
 
 class ForkAwareDict:
@@ -51,7 +62,7 @@ class ForkAwareDict:
         decoder: Callable[[bytes], Any] = lambda e: e.decode("utf-8"),
     ) -> None:
         """
-        :param filename: 
+        :param filename:
             Filename containing binary index
         :param in_memory:
             If False then mmap will be used. It may slow down the search.
@@ -73,42 +84,41 @@ class ForkAwareDict:
 
                 num_records = struct.unpack("Q", self._idx[:8])[0]
                 keys_offsets: List[int] = []
-                for i in range(num_records+1):
-                    offset = struct.unpack(
-                        "Q", self._idx[(i + 1) * 8 : (i + 2) * 8]
-                    )[0]
+                for i in range(num_records + 1):
+                    offset = struct.unpack("Q", self._idx[(i + 1) * 8 : (i + 2) * 8])[0]
 
                     keys_offsets.append(offset)
 
-                keys_start = 8*(num_records + 2)
+                keys_start = 8 * (num_records + 2)
                 data_keys_offsets_start = keys_start + keys_offsets[-1]
-                data_start_offset = data_keys_offsets_start + (num_records + 1)*8
+                data_start_offset = data_keys_offsets_start + (num_records + 1) * 8
 
                 for i in range(num_records):
                     key = self._idx[
-                        keys_start + keys_offsets[i]:
-                        keys_start + keys_offsets[i+1]
+                        keys_start + keys_offsets[i] : keys_start + keys_offsets[i + 1]
                     ].decode("utf-8")
 
                     start = struct.unpack(
                         "Q",
                         self._idx[
-                            data_keys_offsets_start + i*8:
-                            data_keys_offsets_start + (i+1)*8
-                        ]
+                            data_keys_offsets_start
+                            + i * 8 : data_keys_offsets_start
+                            + (i + 1) * 8
+                        ],
                     )[0]
 
                     end = struct.unpack(
                         "Q",
                         self._idx[
-                            data_keys_offsets_start + (i+1)*8:
-                            data_keys_offsets_start + (i+2)*8
-                        ]
+                            data_keys_offsets_start
+                            + (i + 1) * 8 : data_keys_offsets_start
+                            + (i + 2) * 8
+                        ],
                     )[0]
 
                     self.plain_index[key] = (
                         data_start_offset + start,
-                        data_start_offset + end
+                        data_start_offset + end,
                     )
 
             except ValueError as e:
@@ -117,20 +127,18 @@ class ForkAwareDict:
     def get(self, key: Hashable, default: Any = None) -> Optional[Any]:
         """
         :param key: an id at plain index to get an offset
-            Key to search    
+            Key to search
         :param default
-            Default value to return if key is not found in index  
+            Default value to return if key is not found in index
         """
         offsets = self.plain_index.get(key)
         if offsets is None:
             return default
 
-        binary_data = self._idx[offsets[0]: offsets[1]]
+        binary_data = self._idx[offsets[0] : offsets[1]]
 
         try:
-            binary_data = self.decoder(
-                zlib.decompress(binary_data)
-            )
+            binary_data = self.decoder(zlib.decompress(binary_data))
             return binary_data
         except ValueError:
             return default
@@ -176,12 +184,8 @@ class ForkAwareDict:
         keys_offset = 0
         for entry in iterable:
             num_records += 1
-            data_offset_fp.write(
-                struct.pack("Q", offset)
-            )
-            keys_offset_fp.write(
-                struct.pack("Q", keys_offset)
-            )
+            data_offset_fp.write(struct.pack("Q", offset))
+            keys_offset_fp.write(struct.pack("Q", keys_offset))
 
             try:
                 key: str = key_function(entry)
@@ -203,12 +207,8 @@ class ForkAwareDict:
             offset += len(binary_data)
             keys_offset += len(binary_key)
 
-        data_offset_fp.write(
-            struct.pack("Q", offset)
-        )
-        keys_offset_fp.write(
-            struct.pack("Q", keys_offset)
-        )
+        data_offset_fp.write(struct.pack("Q", offset))
+        keys_offset_fp.write(struct.pack("Q", keys_offset))
 
         data_offset_fp.close()
         data_fp.close()
@@ -235,4 +235,3 @@ class ForkAwareDict:
         final_fp.close()
 
         return final_fp.name
-
