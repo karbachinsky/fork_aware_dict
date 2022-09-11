@@ -2,7 +2,7 @@ import mmap
 import struct
 import tempfile
 import zlib
-from typing import Any, Callable, Generator, Hashable, Iterable, Optional, Union, List
+from typing import Any, Callable, Generator, Hashable, Iterable, Optional, Union, List, Dict, Tuple
 
 
 class ForkAwareDict:
@@ -32,8 +32,10 @@ class ForkAwareDict:
     Once values at your dictionary are not simple string, use can use custom encoding:
 
     Notes:
-    – Our implementation also compresses the data for each key which gave as 80% less memo.
-    – This implementation is able to use mmap to get rid of slow dict operations, which somehow decreases the read speed.
+    – Our implementation also compresses the data for
+          each key which gave as 80% less memory.
+    – This implementation is able to use mmap to get rid of slow dict operations,
+          which somehow decreases the read speed.
     """
 
     BUF_SIZE = 4096
@@ -54,9 +56,12 @@ class ForkAwareDict:
         :param in_memory:
             If False then mmap will be used. It may slow down the search.
             Use it for really huge index
+        :param decoder:
+            Function that determines how to convert row binary into proper python structure
         """
-        self.offsets: List[int] = []
-        self.plain_index: List[str] = []
+        self.decoder = decoder
+
+        self.plain_index: Dict[str, Tuple[int, int]] = {}
 
         with open(filename, "r+b") as f:
             try:
@@ -66,26 +71,48 @@ class ForkAwareDict:
                 else:
                     self._idx = f.read()
 
-                num_offsets = struct.unpack("Q", self._idx[:8])[0]
+                num_records = struct.unpack("Q", self._idx[:8])[0]
                 keys_offsets: List[int] = []
-                for i in range(num_offsets):
+                for i in range(num_records+1):
                     offset = struct.unpack(
                         "Q", self._idx[(i + 1) * 8 : (i + 2) * 8]
                     )[0]
 
                     keys_offsets.append(offset)
 
-                for i in range(num_offsets):
-                    key = struct.unpack(
-                        "Q", self._idx[(i + 1) * 8 : (i + 2) * 8]
-                    )[0].decode("utf-8")
+                keys_start = 8*(num_records + 2)
+                data_keys_offsets_start = keys_start + keys_offsets[-1]
+                data_start_offset = data_keys_offsets_start + (num_records + 1)*8
 
-                    self.plain_index[key] = offset
+                for i in range(num_records):
+                    key = self._idx[
+                        keys_start + keys_offsets[i]:
+                        keys_start + keys_offsets[i+1]
+                    ].decode("utf-8")
+
+                    start = struct.unpack(
+                        "Q",
+                        self._idx[
+                            data_keys_offsets_start + i*8:
+                            data_keys_offsets_start + (i+1)*8
+                        ]
+                    )[0]
+
+                    end = struct.unpack(
+                        "Q",
+                        self._idx[
+                            data_keys_offsets_start + (i+1)*8:
+                            data_keys_offsets_start + (i+2)*8
+                        ]
+                    )[0]
+
+                    self.plain_index[key] = (
+                        data_start_offset + start,
+                        data_start_offset + end
+                    )
 
             except ValueError as e:
                 raise self.Error(f"Broken file format: {e}")
-
-            self._start_pos = (num_offsets + 1) * 8
 
     def get(self, key: Hashable, default: Any = None) -> Optional[Any]:
         """
@@ -94,26 +121,16 @@ class ForkAwareDict:
         :param default
             Default value to return if key is not found in index  
         """
-        _id = self.id_mapping.get(key)
-        if _id is None:
+        offsets = self.plain_index.get(key)
+        if offsets is None:
             return default
 
-        offset = self.offsets[_id]
-
-        if _id + 1 < len(self.offsets):
-            binary_data = self._idx[
-                self._start_pos
-                + offset : self._start_pos
-                + self.offsets[_id + 1]
-            ]
-        else:
-            binary_data = self._idx[self._start_pos + offset :]
+        binary_data = self._idx[offsets[0]: offsets[1]]
 
         try:
-            binary_data = zlib.decompress(binary_data)
-            if self.converter:
-                binary_data = self.converter(binary_data)
-
+            binary_data = self.decoder(
+                zlib.decompress(binary_data)
+            )
             return binary_data
         except ValueError:
             return default
@@ -123,14 +140,21 @@ class ForkAwareDict:
         cls,
         iterable: Union[Iterable, Generator],
         *,
-        key: Callable[[Hashable], str] = lambda x: x[0],
-        encoder: Callable[[Any], bytes] = lambda e: e.encode("utf-8"),
+        key_function: Callable[[Any], str] = lambda x: x[0],
+        encoder: Callable[[Any], bytes] = lambda e: e[1].encode("utf-8"),
     ) -> Optional[str]:
         """
         Given an iterable of anything
         creates BinaryIndex for it.
 
-        :param iterable: any 
+        :param iterable:
+            Iterable Data for indexation. Like dict.items()
+
+        :param key:
+            Function that determines how to extract the key from each row of data
+
+        :param encoder:
+            Function that determines how to convert row data into bytes
 
         return: temporary filename with binary index
         """
@@ -147,11 +171,11 @@ class ForkAwareDict:
             suffix=".data.offsets.bin", delete=False, mode="w+b"
         )
 
-        num_offsets = 0
+        num_records = 0
         offset = 0
         keys_offset = 0
         for entry in iterable:
-            num_offsets += 1
+            num_records += 1
             data_offset_fp.write(
                 struct.pack("Q", offset)
             )
@@ -160,15 +184,18 @@ class ForkAwareDict:
             )
 
             try:
+                key: str = key_function(entry)
                 entry: bytes = encoder(entry)
-                key: str = key(entry)
             except Exception as e:
                 raise cls.Error(
-                    f"Couldn't convert {entry} to bytes"
+                    f"Couldn't convert {entry} to bytes: {e}",
                 )
 
+            if not isinstance(key, str):
+                raise cls.Error(f"Key for entry {entry} must be str instance")
+
             binary_data = zlib.compress(entry)
-            binary_key = zlib.compress(key.encode("utf-8"))
+            binary_key = key.encode("utf-8")
 
             data_fp.write(binary_data)
             keys_fp.write(binary_key)
@@ -180,7 +207,7 @@ class ForkAwareDict:
             struct.pack("Q", offset)
         )
         keys_offset_fp.write(
-            struct.pack("Q", offset)
+            struct.pack("Q", keys_offset)
         )
 
         data_offset_fp.close()
@@ -191,7 +218,7 @@ class ForkAwareDict:
         final_fp = tempfile.NamedTemporaryFile(
             suffix=".full.data", delete=False, mode="w+b"
         )
-        final_fp.write(struct.pack("Q", num_offsets))
+        final_fp.write(struct.pack("Q", num_records))
 
         for fp in (
             keys_offset_fp,

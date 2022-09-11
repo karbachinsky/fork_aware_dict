@@ -1,4 +1,4 @@
-from fork_aware_dict import MtmlfDict
+from fork_aware_dict import ForkAwareDict
 
 
 def test_with_simple_dict():
@@ -8,11 +8,13 @@ def test_with_simple_dict():
         "baz": "ccccc"
     }
 
-    filename: str = MtmlfDict.create(data)
+    filename: str = ForkAwareDict.create(data.items())
 
-    index = MtmlfDict(filename)
+    index = ForkAwareDict(filename=filename)
 
     assert index.get("foo") == "aaa"
     assert index.get("bar") == "bbbb"
     assert index.get("baz") == "ccccc"
     assert index.get("something") is None
+
+
